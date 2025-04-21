@@ -27,11 +27,15 @@ def loadDBConfigs(dbname: str, dbpath: str, opts: Edict) \
         ocam.setConfig(cameras_cfg[i])
         mask_file = osp.join(dbpath, ocam.invalid_mask_file)
         if not osp.exists(mask_file):
+            print(f"ocam mask file path {mask_file} does not exist")
+            print("Creating mask file")
             ocam.invalid_mask = ocam.makeInvisibleMask()
             writeImage(ocam.invalid_mask, mask_file)
         ocam.invalid_mask = readImage(mask_file).astype(np.bool)
         ocams.append(ocam)
     
+    print(f"Current opt_max_fov {opts.max_fov}")
+    print(f"ocam max_fov {cameras_cfg[i]['max_fov']}")
     func = '__load_train_%s(opts)' % (dbname)
     try:
         opts = eval(func)
@@ -44,8 +48,8 @@ def loadDBConfigs(dbname: str, dbpath: str, opts: Edict) \
 
 
 def __load_train_sunny(opts):
-    opts.train_idx = list(range(1, 701))
-    opts.test_idx = list(range(701, 1001)) 
+    opts.train_idx = list(range(1, 500)) #701))
+    opts.test_idx = list(range(701, 820)) #1001)) 
     opts.gt_phi = 45
     return opts
 
@@ -63,5 +67,18 @@ def __load_train_omnithings(opts):
 def __load_train_omnihouse(opts):
     opts.train_idx = list(range(1, 2049))
     opts.test_idx = list(range(2049, 2561))
+    opts.gt_phi = 90
+    return opts
+
+def __load_train_issacsim(opts):
+    opts.train_idx = list(range(1, 560))
+    opts.test_idx = list(range(561, 699))
+    opts.gt_phi = 90
+    return opts
+
+def __load_train_issacsim_shrinked(opts):
+    opts.train_idx = list(range(1, 560))
+    opts.test_idx = list(range(561, 699))
+    # opts.test_idx = list(range(300, 699))
     opts.gt_phi = 90
     return opts

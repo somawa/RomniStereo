@@ -48,6 +48,7 @@ def concat(arr_list: list, axis=0):
     else: return np.concatenate(arr_list, axis=axis)
 
 def polyval(P, x):
+    print("This polyval")
     if type(x) == torch.Tensor: P = torch.Tensor(P).to(x.device)
     if type(P) == torch.Tensor:
         npol = P.shape[0]

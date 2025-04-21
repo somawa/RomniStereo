@@ -103,12 +103,15 @@ def interp2D(I, grid):
 
 def pixelToGrid(pts, target_resolution: (int, int), 
                 source_resolution: (int, int)):
+    
     h, w = target_resolution
     height, width = source_resolution
+    print(f"target: {h} {w}, source: {height} {width}")
     xs = (pts[0,:]) / (width - 1) * 2 - 1
     ys = (pts[1,:]) / (height - 1) * 2 - 1
     xs = xs.reshape((h, w, 1))
     ys = ys.reshape((h, w, 1))
+    print()
     return concat((xs, ys), 2)
 
 def normalizeImage(image: np.ndarray, mask=None,
@@ -123,6 +126,7 @@ def normalizeImage(image: np.ndarray, mask=None,
         if mask is not None: image[mask] = 0
         return image
     if len(image.shape) == 3 and image.shape[2] == 3:
+        print("3d numpy image")
         if channel_wise_mean:
             return np.concatenate(
                 [__normalizeImage1D(image[:,:,i], mask)[..., np.newaxis] 
@@ -137,6 +141,7 @@ def normalizeImage(image: np.ndarray, mask=None,
             if mask is not None: image[mask] = 0
             return image
     else:
+        print("1d numpy image")
         return __normalizeImage1D(image, mask)
 
 ## image file I/O =================================
@@ -185,6 +190,7 @@ def writeImage(image: np.ndarray, path: str):
 
 def readImage(path: str, read_or_die = True):
     try:
+        print("we are trying to read img path: ", path)
         return skimage.io.imread(path)
     except Exception as e:
         LOG_ERROR('Failed to read image: "%s"' % (e))
