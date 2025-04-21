@@ -48,7 +48,8 @@ parser.add_argument('--pretrain_ckpt', help="pretrained checkpoint for finetunin
 
 parser.add_argument('--db_root', default='../omnidata', type=str, help='path to dataset')
 parser.add_argument('--dbname', nargs='+', default=['omnithings'], type=str,
-                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset'],  help='databases to train')
+                    # choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset'],  help='databases to train')
+                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'issacsim', 'issacsim_shrinked'],  help='databases to train')
 
 # data options
 parser.add_argument('--phi_deg', type=float, default=45.0, help='phi_deg')
@@ -135,9 +136,12 @@ def train(epoch_total, load_state):
         data = MultiDataset(opts.dbname, opts.data_opts, db_root=opts.db_root)
     else:
         data = Dataset(opts.dbname[0], opts.data_opts, db_root=opts.db_root)
+    print(f"Loaded dataset params: {data}")
     dbloader = torch.utils.data.DataLoader(data, batch_size=opts.batch_size,
                                            pin_memory=True, shuffle=True,
                                            num_workers=0, drop_last=True)
+    print(f"dbloader: {list(dbloader)}")
+    print(f"dbloader of size {len(list(dbloader))} {len(list(dbloader)[0])} {len(list(dbloader)[0][0])}")
     total_num_steps = len(data)*opts.total_epochs//opts.batch_size
 
     net = nn.DataParallel(ROmniStereo(opts.net_opts)).cuda()
@@ -193,20 +197,37 @@ def train(epoch_total, load_state):
         epoch_loss = 0
         LOG_INFO('\nEpoch: %d' % epoch)
         # acc_total=0
+        print(f"dbloader of type {type(dbloader)}")
         for step, data_blob in enumerate(dbloader):
+            print(f"data_blob of type {type(data_blob)}")
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
-
             imgs = [img.cuda() for img in imgs]
+            
+            # valid = valid.cuda()
+            # gt = gt.cuda()
+
+
+            ##########No gt so no valid as well########
+            # valid = [v.cuda() for v in valid]
+            # valid = np.array(valid)
             valid = valid.cuda()
             gt = gt.cuda()
+            # gt = [g.cuda() for g in gt]
+            print(f"valid: {valid}")
+            print(f"gt: {valid}")
 
             # net.zero_grad()
             optimizer.zero_grad()
 
             predictions = net(imgs, grids, opts.train_iters)
+            print(f"Predictions: {predictions}")
 
             loss = sequence_loss(predictions, gt.unsqueeze(1), valid.unsqueeze(1))
+            # loss = sequence_loss(predictions, [g.unsqueeze(1) for g in gt], [v.unsqueeze(1) for v in valid])
+
+
+
 
             train_loss += loss.data
 

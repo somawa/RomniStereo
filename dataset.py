@@ -56,6 +56,7 @@ def makeSphericalRays(equirect_size: (int, int),
                       phi_deg: float, phi2_deg=-1.0) -> np.ndarray:
     h, w = equirect_size
     xs, ys = np.meshgrid(range(w), range(h))  # row major
+    print(f"xs shape: {xs.shape}")
     w_2, h_2 = w / 2.0, (h - 1) / 2.0
     xs = (xs - w_2) / w_2 * np.pi + (np.pi / 2.0)
     if phi2_deg > 0.0:
@@ -83,16 +84,36 @@ class Dataset(torch.utils.data.Dataset):
         self.db_path = osp.join(db_root, self.dbname)
         # Default arguments
         opts = Edict()
+
+        #overwritten by config.yaml through loadDBConfigs 
+        # see (for k in config['config'].keys(): opts[k] = config['config'][k])
         opts.img_fmt = 'cam%d/%04d.png'  # [cam_idx, fidx]
+        # see (for k in config['dataset'].keys(): opts[k] = config['dataset'][k])
+        opts.start, opts.step, opts.end = 1, 1, 1000  # frame
+
         opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff'  # [equi_w, fidx]
+        
+
+        #overwritten by db_opts (opts.data_opts) passed from eval.py to Dataset()
+        #see (opts = argparse(opts, db_opts))
         opts.equirect_size, opts.num_invdepth = [160, 640], 192
         opts.num_downsample = 1
-        opts.phi_deg, opts.phi2_deg = 45, -1.0
+        opts.phi_deg, opts.phi2_deg = 80, -1.0 
+
+        #overwritten by config.yaml thorugh loadDBConfigs 
+        # see (opts.min_depth = opts.omnimvs_sweep_min_depth)
         opts.min_depth = 0.5  # meter scale
+
         opts.max_depth = 1 / EPS
-        opts.max_fov = 220.0  # maximum FOV of input fisheye images
+
+        #independent of max_fov from config.yaml
+        #loadDBConfigs does not overwrite opts.max_fov
+        #loadDBConfigs only uses the max_fov in config.yaml to set self.max_theta for ocam()
+        #this max_fov is not being used for getPanorama and getPanorama_rgb where self.ocams[i].max_theta is used instead
+        opts.max_fov = 250.0  # maximum FOV of input fisheye images
+                
         opts.read_input_image = True  # for evaluation, False if read only GT
-        opts.start, opts.step, opts.end = 1, 1, 1000  # frame
+        
         opts.train_idx, opts.test_idx = [], []
         opts.gt_phi = 0.0
         opts.dtype = 'nogt'
@@ -119,7 +140,9 @@ class Dataset(torch.utils.data.Dataset):
         self.equirect_size = opts.equirect_size
         self.min_depth, self.max_depth = opts.min_depth, opts.max_depth
         self.max_theta = np.deg2rad(opts.max_fov) / 2.0
+        LOG_INFO(f'Using max theta {self.max_theta} with fov {opts.max_fov}')
         self.phi_deg, self.phi2_deg = opts.phi_deg, opts.phi2_deg
+        LOG_INFO(f'Using phi deg {self.phi_deg} phi2_deg {self.phi2_deg}')
         self.num_invdepth = opts.num_invdepth
         self.num_downsample = opts.num_downsample
         self.read_input_image = opts.read_input_image
@@ -175,7 +198,8 @@ class Dataset(torch.utils.data.Dataset):
         else:
             return self.loadTestSample(i, self.read_input_image)
 
-    def buildLookupTable(self, transform=None, phi_deg=None, phi2_deg=None, output_gpu_tensor=False) -> list:
+    def buildLookupTable(self, transform=None, phi_deg=None, phi2_deg=None, output_gpu_tensor=True) -> list:
+        
         num_invdepth = int(self.num_invdepth / 2**self.num_downsample)
         h, w = self.equirect_size
         h, w = h // 2 ** self.num_downsample, w // 2 ** self.num_downsample
@@ -183,7 +207,10 @@ class Dataset(torch.utils.data.Dataset):
 
         if phi_deg is None: phi_deg = self.phi_deg
         if phi2_deg is None: phi2_deg = self.phi2_deg
+
+        print(f"Building up lookup table with num_invdepth {num_invdepth}, invdepths {self.invdepths}, num_downsample {self.num_downsample}")
         rays = makeSphericalRays(equirect_size, phi_deg, phi2_deg)
+        print(f"Obtained rays {rays} (dim: {len(rays[0,:])}), (shape: {rays.shape})")
         if output_gpu_tensor:
             grids = [torch.zeros((h, w, num_invdepth, 2),
                                  requires_grad=False).cuda() for _ in range(4)]
@@ -199,21 +226,32 @@ class Dataset(torch.utils.data.Dataset):
                 pts = applyTransform(transform, pts)
             for i in range(4):
                 P = applyTransform(self.ocams[i].rig2cam, pts)
+                print(f"Passing rays with shape {P.shape} to R2P")
                 p = self.ocams[i].rayToPixel(P)
+                print(f"Received R2P {p} with shape {p.shape}")
                 grid = pixelToGrid(p, equirect_size,
                                    (self.ocams[i].height, self.ocams[i].width))
-                grid = np.clip(grid, -2, 1)
+                print(f"Received P2G with shape {grid.shape}")
                 if output_gpu_tensor:
+                    grid = torch.clamp(grid, min=-2, max=1)
                     grids[i][..., d, :] = grid
                 else:
+                    grid = np.clip(grid, -2, 1)
                     grids[i][..., d, :] = grid.astype(np.float32)
+                # if output_gpu_tensor:
+                #     grids[i][..., d, :] = grid
+                # else:
+                #     grids[i][..., d, :] = grid.astype(np.float32)
+            print(f"Final grid with shape {grid.shape}")
         return grids
 
     def loadImages(self, fidx, out_raw_imgs=False, use_rgb=False):
         imgs = []
         raw_imgs = []
+        print(f"Curr fidx is {fidx}")
         for i in range(4):
             file_path = osp.join(self.db_path, self.img_fmt % (i + 1, fidx))
+            #print(f"Reading image path {file_path}")
             I = readImage(file_path)
             if out_raw_imgs: raw_imgs.append(I)
         if fidx in self.train_idx:
@@ -233,6 +271,7 @@ class Dataset(torch.utils.data.Dataset):
     
     def readInvdepth(self, path: str) -> np.ndarray:
         _, ext = osp.splitext(path)
+        print(f"ext is {ext}")
         if ext == '.png':
             step_invdepth = (self.max_invdepth - self.min_invdepth) / 65500.0
             quantized_inv_index = readImage(path).astype(np.float32)
@@ -269,6 +308,7 @@ class Dataset(torch.utils.data.Dataset):
                             morph_win_size=5):
         h, w = self.equirect_size
         gt_depth_file = osp.join(self.db_path, self.gt_depth_fmt % (w, fidx))
+        print(f"Attempting to read gtdepthfile at path {gt_depth_file}")
         gt = self.readInvdepth(gt_depth_file)
         gt_h = gt.shape[0]
         # crop height
@@ -297,13 +337,19 @@ class Dataset(torch.utils.data.Dataset):
         opts = argparse(opts, varargin)
         imgs, raw_imgs = [], []
         if read_input_image:
+            print(f"Loading images for fidx {fidx}")
             imgs, raw_imgs = self.loadImages(fidx, True, use_rgb=self.use_rgb)
+            print("Finished loading")
         gt, valid = [], []
         if self.dtype == 'gt':
+            print("Loading GTInvdepthIndex")
             gt = self.loadGTInvdepthIndex(fidx, 
                 opts.remove_gt_noise, opts.morph_win_size)
+            print(f"Finished with gt_idx {gt}")
             valid = np.logical_and(
                 gt >= 0, gt <= self.num_invdepth).astype(np.bool)
+        else:
+            print(f"No gt depth file for fidx", fidx)
         return imgs, gt, valid, raw_imgs
 
     def loadTrainSample(self, i: int, read_input_image=True, varargin=None):
@@ -322,7 +368,9 @@ class Dataset(torch.utils.data.Dataset):
         valid_count = np.zeros(self.equirect_size, dtype=np.uint8)
         for i in range(4):
             P2 = applyTransform(self.ocams[i].rig2cam, P)
+            print(f"Applying R2P on {P2}")
             p, theta = self.ocams[i].rayToPixel(P2, out_theta=True)
+            print(f"Received R2P for panorama {p} {theta}")
             grid = pixelToGrid(p, self.equirect_size,
                 (self.ocams[i].height,self.ocams[i].width))
             equi_im = toNumpy(interp2D(imgs[i], grid))
@@ -343,7 +391,9 @@ class Dataset(torch.utils.data.Dataset):
         valid_count = np.zeros(self.equirect_size+[3], dtype=np.uint8)
         for i in range(4):
             P2 = applyTransform(self.ocams[i].rig2cam, P)
+            print(f"Applying R2P on {len(P2)} (dim: {len(P2[0])}) for P2 {P2}")
             p, theta = self.ocams[i].rayToPixel(P2, out_theta=True)
+            print(f"Received R2P for panorama rgb with {len(p)} (dim: {len(p[0])}) of p {p} and {len(theta)} of theta {theta}")
             grid = pixelToGrid(p, self.equirect_size,
                 (self.ocams[i].height,self.ocams[i].width))
             equi_im = toNumpy(interp2D(imgs[i].transpose(2, 0, 1), grid)).transpose(1, 2, 0)
@@ -384,7 +434,7 @@ class Dataset(torch.utils.data.Dataset):
         if gt is not None and len(gt) > 0:
             err = np.abs(self.invdepthToIndex(invdepth) - toNumpy(gt))
             err_rgb = colorMap('jet', err, 0, 10)
-            vis = np.concatenate((vis, err_rgb), axis=0)
+            vis = np.concatenate((vis, err_rgb, colorMap('jet', toNumpy(gt))), axis=0)
         else:
             err_rgb = None
         ratio = vis.shape[0] / float(inputs.shape[0])

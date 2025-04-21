@@ -30,12 +30,16 @@ parser.add_argument('--name', default='ROmniStereo', help="name of your experime
 parser.add_argument('--restore_ckpt', help="restore checkpoint")
 
 parser.add_argument('--db_root', default='../omnidata', type=str, help='path to dataset')
+# parser.add_argument('--dbname', default='omnithings', type=str,
+#                     choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset'],  help='databases to evaluation')
+
+
 parser.add_argument('--dbname', default='omnithings', type=str,
-                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset'],  help='databases to evaluation')
+                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'issacsim', 'issacsim_shrinked'],  help='databases to evaluation')
 
 # data options
 parser.add_argument('--phi_deg', type=float, default=45.0, help='phi_deg')
-parser.add_argument('--equirect_size', type=int, nargs='+', default=[160, 640], help="size of out ERP.")
+parser.add_argument('--equirect_size', type=int, nargs='+', default=[160, 640], help="size of out ERP.")#[160, 640], help="size of out ERP.")
 
 parser.add_argument('--valid_iters', type=int, default=12,
                     help='number of flow-field updates during validation forward pass')
@@ -49,16 +53,17 @@ parser.add_argument('--save_point_cloud', action='store_true', help='save point 
 args = parser.parse_args()
 
 opts = Edict()
-opts.snapshot_path = args.restore_ckpt
+opts.snapshot_path = args.restore_ckpt #pre-trained model
 opts.name = args.name
 
-opts.dbname = args.dbname
-opts.db_root = args.db_root
+opts.dbname = args.dbname #dataset folder ('omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'issacsim', 'issacsim_shrinked')
+opts.db_root = args.db_root #default ../omnidata
 
+#vars that will overwrite opts variable in Dataset.py (see opts = argparse(opts, db_opts))
 opts.data_opts = Edict()
 opts.data_opts.color_aug = False
-opts.data_opts.phi_deg = args.phi_deg
-opts.data_opts.equirect_size = args.equirect_size
+opts.data_opts.phi_deg = args.phi_deg #to check if default value is applicable
+opts.data_opts.equirect_size = args.equirect_size #to check if default value is applicable
 
 opts.valid_iters = args.valid_iters
 opts.net_opts = Edict()
@@ -86,6 +91,7 @@ def main():
     snapshot = torch.load(opts.snapshot_path)
 
     opts.net_opts = snapshot['net_opts']
+    print(f"Loaded ckpt net_opts {opts.net_opts}")
     net = torch.nn.DataParallel(ROmniStereo(opts.net_opts), device_ids=[0])
     net.load_state_dict(snapshot['net_state_dict'])
     opts.data_opts.use_rgb = opts.net_opts.use_rgb
@@ -101,19 +107,24 @@ def main():
         LOG_INFO('"%s" directory created' % (opts.result_dir))
 
     eval_list = data.opts.test_idx
+    print("eval_list: ", eval_list)
 
     errors = np.zeros((len(eval_list), 5))
     acc_toc = 0
     for d in range(len(eval_list)):
         fidx = eval_list[d]
+        print("curr fidx:", fidx)
         imgs, gt, valid, raw_imgs = data.loadSample(fidx)
+        print("Loaded sample")
         toc, toc2 = 0, 0
         net.eval()
         tic = time.time()
         imgs = [torch.Tensor(img).unsqueeze(0).cuda() for img in imgs]
         with torch.no_grad():
             invdepth_idx = net(imgs, grids, opts.valid_iters, test_mode=True)
+        print(f"Post-neuralnetwork invdepth_idx before numpy of {len(invdepth_idx)} {invdepth_idx}")
         invdepth_idx = toNumpy(invdepth_idx[0, 0])
+        print(f"Post-neuralnetwork invdepth_idx of {len(invdepth_idx)} {invdepth_idx}")
         invdepth = data.indexToInvdepth(invdepth_idx)
         toc = time.time() - tic
         acc_toc += toc
@@ -126,6 +137,7 @@ def main():
             tic2 = time.time()
             vis_img, inputs_rgb, pano_rgb, invdepth_rgb, err = data.makeVisImage(raw_imgs, invdepth, gt, return_all=True)
             if opts.vis:
+                # plt.imshow(raw_imgs[0])
                 fig.clf()
                 plt.imshow(vis_img)
                 plt.axis('off')
